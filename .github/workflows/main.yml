@@ -1,43 +1,53 @@
-name: Zhest KZ Video Processor
+name: Zhest KZ Auto Video Processor
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
+
   workflow_dispatch:
     inputs:
       media_url:
-        description: "Media URL"
+        description: "Direct media URL (optional manual override)"
         required: false
         default: ""
+        type: string
       title:
-        description: "Title"
+        description: "Headline/title"
         required: false
         default: "Тест ЖЕСТЬ KZ"
+        type: string
       text:
-        description: "Text"
+        description: "Optional body"
         required: false
-        default: "Проверка автоматического видеопроцессора"
+        default: ""
+        type: string
       job_id:
-        description: "Job ID"
+        description: "Job id"
         required: false
         default: "manual-test"
+        type: string
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: zhestkz-auto-video
+  cancel-in-progress: false
 
 jobs:
   process:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     env:
-      MEDIA_URL: ${{ inputs.media_url }}
-      TITLE: ${{ inputs.title }}
-      TEXT: ${{ inputs.text }}
-      JOB_ID: ${{ inputs.job_id }}
       WHISPER_MODEL: base
+      ZHESKZ_QUEUE_URL: "https://zhestkz.kzalladinkz.workers.dev/video/jobs?limit=20"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install FFmpeg
         run: |
@@ -48,28 +58,89 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Select scheduled news job
+        if: github.event_name == 'schedule'
+        run: python src/collector.py select
+
+      - name: Load manual inputs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_MEDIA_URL: ${{ inputs.media_url }}
+          INPUT_TITLE: ${{ inputs.title }}
+          INPUT_TEXT: ${{ inputs.text }}
+          INPUT_JOB_ID: ${{ inputs.job_id }}
         run: |
-          pip install -r requirements.txt
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          vals = {
+              "HAS_JOB": "1",
+              "MEDIA_URL": os.getenv("INPUT_MEDIA_URL", ""),
+              "TITLE": os.getenv("INPUT_TITLE", "Тест ЖЕСТЬ KZ"),
+              "TEXT": os.getenv("INPUT_TEXT", ""),
+              "JOB_ID": os.getenv("INPUT_JOB_ID", "manual-test"),
+              "SOURCE_URL": "",
+          }
+          out = Path(os.environ["GITHUB_ENV"])
+          with out.open("a", encoding="utf-8") as f:
+              for k, v in vals.items():
+                  marker = f"EOF_{k}"
+                  f.write(f"{k}<<{marker}\n{v}\n{marker}\n")
+          PY
+
+      - name: No new job
+        if: env.HAS_JOB != '1'
+        run: echo "No new Zhest KZ video job. Nothing to render."
 
       - name: Process video
-        run: |
-          python src/processor.py
+        if: env.HAS_JOB == '1'
+        run: python src/processor.py
 
-      - name: Check result
+      - name: Validate result
+        if: env.HAS_JOB == '1'
         run: |
-          ls -lah output/
-          ffprobe -v error \
-            -show_entries stream=codec_name,width,height \
-            -of json \
-            output/zhestkz_tiktok.mp4
+          test -s output/zhestkz_tiktok.mp4
+          python - <<'PY'
+          import json
+          import subprocess
 
-      - name: Upload result
+          raw = subprocess.check_output([
+              "ffprobe", "-v", "error", "-select_streams", "v:0",
+              "-show_entries", "stream=width,height,codec_name",
+              "-of", "json", "output/zhestkz_tiktok.mp4"
+          ], text=True)
+          stream = json.loads(raw)["streams"][0]
+          assert stream["width"] == 1080 and stream["height"] == 1920, stream
+          assert stream["codec_name"] == "h264", stream
+          print("VALID:", stream)
+          PY
+
+      - name: Upload processed video
+        if: env.HAS_JOB == '1'
         uses: actions/upload-artifact@v4
         with:
-          name: zhestkz-video-${{ inputs.job_id }}
+          name: zhestkz-video-${{ env.JOB_ID }}
           path: |
             output/zhestkz_tiktok.mp4
             output/result.json
           retention-days: 3
+          if-no-files-found: error
+
+      - name: Mark scheduled job processed
+        if: github.event_name == 'schedule' && env.HAS_JOB == '1' && success()
+        run: |
+          python src/collector.py mark --job-id "$JOB_ID"
+          git config user.name "zhestkz-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state/processed.json
+          if ! git diff --cached --quiet; then
+            git commit -m "state: processed ${JOB_ID}"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

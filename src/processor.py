@@ -68,7 +68,16 @@ def safe_filename_from_url(url, default="source.bin"):
 def download(url):
     dest = WORK / safe_filename_from_url(url)
     print(f"Downloading {url} -> {dest}")
-    with requests.get(url, stream=True, timeout=120, allow_redirects=True) as r:
+    with requests.get(
+        url,
+        stream=True,
+        timeout=120,
+        allow_redirects=True,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; ZhestKZ-VideoProcessor/1.2)",
+            "Accept": "*/*",
+        },
+    ) as r:
         r.raise_for_status()
         with dest.open("wb") as f:
             for chunk in r.iter_content(1024 * 1024):
