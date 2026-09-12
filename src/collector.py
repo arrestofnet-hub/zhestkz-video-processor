@@ -2,16 +2,15 @@
 import argparse
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
-import requests
+from urllib.request import Request, urlopen
 
 ROOT = Path(os.getenv("GITHUB_WORKSPACE", "."))
 STATE_DIR = ROOT / "state"
 STATE_FILE = STATE_DIR / "processed.json"
 DEFAULT_QUEUE_URL = "https://zhestkz.kzalladinkz.workers.dev/video/jobs?limit=20"
+
 
 def load_state():
     if not STATE_FILE.exists():
@@ -27,10 +26,10 @@ def load_state():
     except Exception:
         return {"processed": []}
 
+
 def save_state(state):
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     rows = state.get("processed", [])
-    # newest first, max 500
     rows = sorted(
         [r for r in rows if isinstance(r, dict) and r.get("id")],
         key=lambda r: str(r.get("processedAt", "")),
@@ -41,8 +40,10 @@ def save_state(state):
         encoding="utf-8",
     )
 
+
 def processed_ids(state):
     return {str(r.get("id")) for r in state.get("processed", []) if r.get("id")}
+
 
 def write_env(values):
     env_path = os.getenv("GITHUB_ENV")
@@ -57,16 +58,20 @@ def write_env(values):
             marker = f"EOF_ZHESTKZ_{key}"
             f.write(f"{key}<<{marker}\n{value}\n{marker}\n")
 
+
 def select_job():
     queue_url = os.getenv("ZHESKZ_QUEUE_URL", DEFAULT_QUEUE_URL)
     print(f"Queue: {queue_url}")
-    r = requests.get(
+    req = Request(
         queue_url,
-        timeout=90,
-        headers={"User-Agent": "ZhestKZ-GitHub-Processor/1.0"},
+        headers={
+            "User-Agent": "ZhestKZ-GitHub-Processor/1.1",
+            "Accept": "application/json",
+        },
     )
-    r.raise_for_status()
-    data = r.json()
+    with urlopen(req, timeout=90) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
     jobs = data.get("jobs") or []
     if not isinstance(jobs, list):
         jobs = []
@@ -90,7 +95,6 @@ def select_job():
         })
         return 0
 
-    # Process oldest pending item first so temporary downtime can catch up.
     job = sorted(pending, key=lambda j: int(j.get("createdAt") or 0))[0]
     job_id = str(job.get("id"))
     media_url = str(job.get("mediaUrl") or "")
@@ -109,6 +113,7 @@ def select_job():
     })
     return 0
 
+
 def mark_done(job_id):
     if not job_id:
         raise SystemExit("job id is required")
@@ -124,6 +129,7 @@ def mark_done(job_id):
     print(f"Marked processed: {job_id}")
     return 0
 
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -134,6 +140,7 @@ def main():
     if args.cmd == "select":
         return select_job()
     return mark_done(args.job_id)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
