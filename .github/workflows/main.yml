@@ -49,23 +49,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
-
-      - name: Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
       - name: Select scheduled news job
         if: github.event_name == 'schedule'
-        run: python src/collector.py select
+        run: python3 src/collector.py select
 
       - name: Load manual inputs
         if: github.event_name == 'workflow_dispatch'
@@ -75,7 +61,7 @@ jobs:
           INPUT_TEXT: ${{ inputs.text }}
           INPUT_JOB_ID: ${{ inputs.job_id }}
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import os
           from pathlib import Path
 
@@ -97,6 +83,23 @@ jobs:
       - name: No new job
         if: env.HAS_JOB != '1'
         run: echo "No new Zhest KZ video job. Nothing to render."
+
+      - name: Install FFmpeg
+        if: env.HAS_JOB == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Python
+        if: env.HAS_JOB == '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        if: env.HAS_JOB == '1'
+        run: pip install -r requirements.txt
 
       - name: Process video
         if: env.HAS_JOB == '1'
