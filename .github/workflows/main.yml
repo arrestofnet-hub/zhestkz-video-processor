@@ -1,0 +1,75 @@
+name: Zhest KZ Video Processor
+
+on:
+  workflow_dispatch:
+    inputs:
+      media_url:
+        description: "Media URL"
+        required: false
+        default: ""
+      title:
+        description: "Title"
+        required: false
+        default: "Тест ЖЕСТЬ KZ"
+      text:
+        description: "Text"
+        required: false
+        default: "Проверка автоматического видеопроцессора"
+      job_id:
+        description: "Job ID"
+        required: false
+        default: "manual-test"
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      MEDIA_URL: ${{ inputs.media_url }}
+      TITLE: ${{ inputs.title }}
+      TEXT: ${{ inputs.text }}
+      JOB_ID: ${{ inputs.job_id }}
+      WHISPER_MODEL: base
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Process video
+        run: |
+          python src/processor.py
+
+      - name: Check result
+        run: |
+          ls -lah output/
+          ffprobe -v error \
+            -show_entries stream=codec_name,width,height \
+            -of json \
+            output/zhestkz_tiktok.mp4
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhestkz-video-${{ inputs.job_id }}
+          path: |
+            output/zhestkz_tiktok.mp4
+            output/result.json
+          retention-days: 3
