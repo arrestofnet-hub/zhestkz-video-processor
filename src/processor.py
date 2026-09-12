@@ -250,7 +250,21 @@ def render_image(source, title):
     return out
 
 def render_text(title, body=None):
-    return render_image(make_card(title, body), title)
+    card = make_card(title, body)
+    dur = DEFAULT_DURATION
+    out = OUT / "zhestkz_tiktok.mp4"
+    run([
+        "ffmpeg", "-y", "-loop", "1", "-i", str(card),
+        "-vf",
+        "scale=1200:2134:force_original_aspect_ratio=increase,"
+        "crop=1200:2134,"
+        "zoompan=z='min(zoom+0.0006,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=360:s=1080x1920:fps=30",
+        "-t", str(dur),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        str(out)
+    ])
+    return out
 
 def callback(url, key, payload):
     if not url:
