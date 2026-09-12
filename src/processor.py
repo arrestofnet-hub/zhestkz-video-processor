@@ -58,6 +58,20 @@ def duration_seconds(path):
     except Exception:
         return 0.0
 
+def normalize_media_url(url):
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        url = "https:" + url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    lowered = url.lower()
+    if "telegram.org/img/emoji/" in lowered:
+        return ""
+    return url
+
 def safe_filename_from_url(url, default="source.bin"):
     p = urllib.parse.urlparse(url)
     name = Path(urllib.parse.unquote(p.path)).name
@@ -151,8 +165,8 @@ def transcribe(source):
     if not has_audio(source):
         return []
     wav = WORK / "audio.wav"
-    run(["ffmpeg", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-t", str(MAX_DURATION), str(wav)])
     try:
+        run(["ffmpeg", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-t", str(MAX_DURATION), str(wav)])
         from faster_whisper import WhisperModel
         model_name = os.getenv("WHISPER_MODEL", "base")
         print(f"Loading Whisper model: {model_name}")
@@ -275,6 +289,31 @@ def render_text(title, body=None):
     ])
     return out
 
+def render_job(media_url, title, body=None):
+    normalized = normalize_media_url(media_url)
+    if media_url and not normalized:
+        print("Ignoring unusable media URL; rendering text card instead:", media_url)
+    if not normalized:
+        return render_text(title, body)
+
+    try:
+        src = download(normalized)
+        kind = media_kind(src)
+        print("Detected kind:", kind)
+        if kind == "video":
+            return render_video(src, title)
+        if kind == "image":
+            return render_image(src, title)
+        try:
+            Image.open(src).verify()
+            return render_image(src, title)
+        except Exception:
+            print("Downloaded media is unsupported; rendering text card instead.")
+            return render_text(title, body)
+    except Exception as exc:
+        print("Media processing failed; rendering text card instead:", repr(exc))
+        return render_text(title, body)
+
 def callback(url, key, payload):
     if not url:
         return
@@ -301,22 +340,7 @@ def main():
     callback(args.callback_url, args.processor_key, {"job_id": args.job_id, "status": "processing"})
 
     try:
-        if args.media_url:
-            src = download(args.media_url)
-            kind = media_kind(src)
-            print("Detected kind:", kind)
-            if kind == "video":
-                out = render_video(src, args.title)
-            elif kind == "image":
-                out = render_image(src, args.title)
-            else:
-                try:
-                    Image.open(src).verify()
-                    out = render_image(src, args.title)
-                except Exception:
-                    out = render_text(args.title, args.text)
-        else:
-            out = render_text(args.title, args.text)
+        out = render_job(args.media_url, args.title, args.text)
 
         info = ffprobe_json(out)
         result = {
