@@ -2,7 +2,7 @@ name: Zhest KZ Auto Video Processor
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
 
   workflow_dispatch:
     inputs:
