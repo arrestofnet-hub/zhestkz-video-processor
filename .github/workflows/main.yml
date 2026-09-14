@@ -1,6 +1,13 @@
 name: Zhest KZ Auto Video Processor
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - ".github/workflows/main.yml"
+
   schedule:
     - cron: "*/15 * * * *"
 
@@ -49,8 +56,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select scheduled news job
-        if: github.event_name == 'schedule'
+      - name: Select automatic news job
+        if: github.event_name == 'schedule' || github.event_name == 'push'
         run: python3 src/collector.py select
 
       - name: Load manual inputs
@@ -135,8 +142,8 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-      - name: Mark scheduled job processed
-        if: github.event_name == 'schedule' && env.HAS_JOB == '1' && success()
+      - name: Mark automatic job processed
+        if: (github.event_name == 'schedule' || github.event_name == 'push') && env.HAS_JOB == '1' && success()
         run: |
           python src/collector.py mark --job-id "$JOB_ID"
           git config user.name "zhestkz-bot"
