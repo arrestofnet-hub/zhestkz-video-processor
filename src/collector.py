@@ -2,8 +2,10 @@
 import argparse
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 ROOT = Path(os.getenv("GITHUB_WORKSPACE", "."))
@@ -59,14 +61,32 @@ def write_env(values):
             f.write(f"{key}<<{marker}\n{value}\n{marker}\n")
 
 
+def cache_busted(url):
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["_ts"] = str(int(time.time()))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def first_nonempty(job, *keys):
+    for key in keys:
+        value = job.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
 def select_job():
     queue_url = os.getenv("ZHESKZ_QUEUE_URL", DEFAULT_QUEUE_URL)
+    request_url = cache_busted(queue_url)
     print(f"Queue: {queue_url}")
     req = Request(
-        queue_url,
+        request_url,
         headers={
-            "User-Agent": "ZhestKZ-GitHub-Processor/1.1",
+            "User-Agent": "ZhestKZ-GitHub-Processor/1.2",
             "Accept": "application/json",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
         },
     )
     with urlopen(req, timeout=90) as response:
@@ -78,6 +98,11 @@ def select_job():
 
     state = load_state()
     done = processed_ids(state)
+    queue_ids = [str(j.get("id")) for j in jobs if isinstance(j, dict) and j.get("id")]
+    print(f"Worker version: {data.get('version', 'unknown')}; queue_count={len(jobs)}")
+    print(f"Queue IDs: {queue_ids}")
+    print(f"Processed IDs: {sorted(done)}")
+
     pending = [
         j for j in jobs
         if isinstance(j, dict) and j.get("id") and str(j.get("id")) not in done
@@ -97,12 +122,14 @@ def select_job():
 
     job = sorted(pending, key=lambda j: int(j.get("createdAt") or 0))[0]
     job_id = str(job.get("id"))
-    media_url = str(job.get("mediaUrl") or "")
-    title = str(job.get("title") or "ЖЕСТЬ KZ").strip()
-    text = str(job.get("text") or "").strip()
-    source_url = str(job.get("link") or "")
+    media_url = first_nonempty(job, "mediaUrl", "videoUrl", "image", "imageUrl", "thumbnail")
+    title = first_nonempty(job, "title") or "ЖЕСТЬ KZ"
+    text = first_nonempty(job, "text", "caption", "description", "summary")
+    source_url = first_nonempty(job, "link", "sourceUrl", "url")
 
+    print("Selected job:")
     print(json.dumps(job, ensure_ascii=False, indent=2))
+    print(f"Mapped fields: media={'yes' if media_url else 'no'}, text={'yes' if text else 'no'}, source={'yes' if source_url else 'no'}")
     write_env({
         "HAS_JOB": "1",
         "MEDIA_URL": media_url,
